@@ -15,3 +15,12 @@ venv/
 *.log
 trades.log
 .cache/
+
+# 会话/记忆与 IDE 工作区数据（含本机口令记录，绝不入库）
+.workbuddy/
+
+# 看板运行缓存（生成结果 index.html 保留）
+# ⚠️ .secret.json 内含访问口令明文，切勿提交到仓库
+fund-strategy/dashboard/.kline_cache.json
+fund-strategy/dashboard/.state.json
+fund-strategy/dashboard/.secret.json

@@ -13,8 +13,10 @@ Fund-Transaction-Strategy/
 ├── README.md                      # 本文件（项目总览）
 ├── fund-strategy/                 # 💰 基金（ETF）购买策略
 │   ├── STRATEGY.md                # ETF 网格 + 趋势跟踪混合策略 v1.1（完整规则）
-│   ├── etf_daily_report.py        # 每日 ETF 策略报告生成脚本
-│   └── reports/                   # 每日报告输出样例
+│   ├── etf_daily_report.py        # 每日 ETF 策略报告生成脚本（Markdown）
+│   ├── etf_dashboard.py           # 🆕 HTML 看板生成器（零第三方依赖）
+│   ├── dashboard/index.html       # 🆕 单文件自包含看板（双击即开）
+│   └── reports/                   # 每日报告输出样例（Markdown）
 ├── stock-strategy/                # 📈 股票购买策略
 │   ├── STOCK_STRATEGY.md          # A股个股购买策略（选股/买卖点/风控）
 │   ├── daily_stock_analysis.py    # 每日A股盘面分析 + TOP3 个股推荐脚本
@@ -39,10 +41,42 @@ Fund-Transaction-Strategy/
 - **每日精选**：25 只全池打分，取 Top3（趋势 3 + 相对动量 3 + 位置 2 + 新鲜信号 2），类别分散 + 轮动。
 
 ```bash
-# 生成每日 ETF 策略报告
+# 生成每日 ETF 策略报告（Markdown，依赖 akshare）
 python3 fund-strategy/etf_daily_report.py
 # 报告输出到 fund-strategy/reports/etf_report_YYYY-MM-DD.md
+
+# 🆕 生成 ETF 策略 HTML 看板（无需安装任何第三方包）
+python3 fund-strategy/etf_dashboard.py
+# 输出到 fund-strategy/dashboard/index.html
 ```
+
+### 📺 HTML 看板（`fund-strategy/etf_dashboard.py`，v2.0）
+
+- **零依赖**：只用 Python 标准库。日K 用腾讯 / 新浪，ETF 清单用新浪（东财兜底）。
+- **标的池可扩展**：默认 **25 只核心池（STRATEGY.md 固定清单，强制保底）+ 全市场自动优选 35 只 = 60 只**。
+  自动选池流程：拉全市场 ETF → 剔除货币/现金/债券类 → 同名指数去重 → 按成交额降序取候选 →
+  抓 K 线后按近 60 日收益率相关性（>0.98）再去掉一批高重复标的。
+  `--pool-size 100` 可放宽（实测 100 只全量重抓约 2~4 秒），`--core-only` 退回固定 25 只。
+- **每 30 秒自动刷新实时价**：页面用腾讯 `qt.gtimg.cn` 的 `<script>` 接口（无 CORS 限制）
+  定时拉取盘中报价，自动更新上证沪深300、Top3 卡片与候选池的价格/涨跌幅/时间戳。
+  **流量控制**（针对有出口流量限制的部署）：
+  - 登录成功前**不发起任何行情请求**（页面中也不含任何外部依赖，68KB 单文件全部本地）；
+  - **标签页切到后台 / 最小化立即暂停**，切回来才恢复；
+  - **离开页面（pagehide / beforeunload）彻底停表**，不会再有任何请求；
+  - 上一轮请求未返回不会发下一轮，避免网络慢时堆积；
+  - 右上角「锁定」按钮可随时停刷新并回到登录页；
+  - 状态栏实时显示「已拉取 N 次 / 约 X KB」，用量可见。
+  - ⚠️ 注意：行情请求是**访客浏览器 → 腾讯接口直连**，不经过你的服务器；
+    服务器侧只承担页面本身（约 60KB / 次首次加载，后续可被浏览器缓存）。
+    实测单次 14 只报价约 7.4KB，30 秒一次约 **0.9MB/小时**。若日后改成走自家服务端代理，上述控制策略同样生效。
+- **前置密码门禁**：页面正文用 **PBKDF2-SHA256 + SHA256-CTR 流密钥整体加密**，
+  浏览器原生 WebCrypto 解密 —— **拿到 HTML 文件本体也读不到内容**。
+  首次运行自动生成本机随机口令（存 `dashboard/.secret.json`，已 gitignore），
+  `--set-password` 可改，`--no-auth` 生成明文版，环境变量 `ETF_DASHBOARD_PASSWORD` 支持自动化。
+- **K 线缓存**：同交易日复用本地缓存（秒开），跨日自动失效；`--force` 强制全量重抓，`--offline` 纯离线重绘。
+- **提示**：若浏览器环境不支持 `crypto.subtle`（个别的 `file://` 场景），
+  用 `python3 fund-strategy/etf_dashboard.py --serve` 起本地 http://127.0.0.1 服务打开。
+- **页面模块**：市场情绪扫描 + Top3 推荐卡 + 候选池 Top10；颜色遵循 A 股习惯（涨红跌绿）。
 
 ---
 
