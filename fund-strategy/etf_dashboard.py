@@ -358,6 +358,27 @@ def save_cache(kmap):
         print(f"  ⚠ 缓存写入失败: {e}")
 
 
+def cache_is_fresh():
+    """用沪深300 探针对比缓存与行情源的最新 K 线日期；落后即视为过期。
+
+    这样无论隔了多少天（长假、忘记跑），只要重跑脚本就能自动拿到
+    最新交易日的数据，Top3 / 打分不会停留在旧快照上。
+    """
+    cache = load_cache()
+    if not cache:
+        return False
+    probe_code = "510300"
+    old = cache.get(probe_code) or []
+    try:
+        new = fetch_kline("sh" + probe_code)
+    except Exception:                                           # noqa: BLE001
+        return True                     # 探针失败保守复用缓存，避免无网时全量重抓
+    if not new:
+        return True
+    old_d = old[-1]["date"] if old else None
+    return new[-1]["date"] == old_d
+
+
 def ensure_klines(pool, workers=10):
     """按需抓取：缓存命中的直接用，只补缺失的"""
     cache = load_cache()
@@ -1481,7 +1502,8 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
     <div class="risks"><div class="lab">主要风险点</div><div class="chips">{risk_chips}</div></div>
   </section>
 
-  <div class="sec-title" style="margin:22px 0 14px"><span class="bar"></span>今日重点推荐 ETF · Top 3</div>
+  <div class="sec-title" style="margin:22px 0 14px"><span class="bar"></span>今日重点推荐 ETF · Top 3
+    <span style="font-size:12px;font-weight:400;color:var(--tx3);margin-left:10px">基于 {data_date} 收盘数据打分，重跑脚本即更新；卡片价格为实时刷新</span></div>
   <section class="top3">{"".join(cards)}</section>
 
   <section class="card cand">
@@ -1608,6 +1630,9 @@ def main():
         print(f"📦 离线模式：缓存 {len(kmap)} 只，本次使用 {len(pool)} 只")
     else:
         if force:
+            save_cache({})
+        elif not cache_is_fresh():
+            print("   🔄 行情源已有更新的交易日数据，缓存失效重建…")
             save_cache({})
         if core_only:
             pool = list(CORE_POOL)
