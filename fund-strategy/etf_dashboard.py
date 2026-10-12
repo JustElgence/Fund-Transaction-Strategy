@@ -16,6 +16,12 @@ v2.0 更新（相对 v1.0）：
      浏览器侧用原生 WebCrypto 解密。**拿到 HTML 文件本体也读不到内容**。
      （不需要密码：--no-auth 输出明文页）
 
+v2.1 更新：
+  5. 网页端一键重跑：--serve 模式下页面右上角新增「↻ 重跑打分」按钮（POST /api/rerun），
+     服务端用子进程重跑本脚本、原子替换 index.html，完成后页面自动刷新，打分/Top3
+     的更新不再需要回终端敲命令。接口仅监听 127.0.0.1，并校验请求 Origin 防跨站触发；
+     file:// 直接打开时按钮会提示改用 --serve。
+
 设计要点：
   * 零第三方依赖：只用 Python 标准库（urllib / json / hashlib / math）。
   * 数据源：日K 用腾讯（前复权），失败降级新浪；实时价用腾讯 qt.gtimg.cn。
@@ -30,7 +36,8 @@ v2.0 更新（相对 v1.0）：
     python fund-strategy/etf_dashboard.py --offline       # 不联网，用缓存重绘
     python fund-strategy/etf_dashboard.py --set-password  # 修改口令
     python fund-strategy/etf_dashboard.py --no-auth       # 不加密码（明文页）
-    python fund-strategy/etf_dashboard.py --serve         # 生成后起本地服务并打开浏览器
+    python fund-strategy/etf_dashboard.py --serve         # 生成后起本地服务并打开浏览器（支持网页端一键重跑）
+    python fund-strategy/etf_dashboard.py --serve --port 8899   # 指定本地服务端口
     环境变量 ETF_DASHBOARD_PASSWORD 可用于自动化免交互。
 
 ⚠️ 仅用于策略研究参考，不构成投资建议。
@@ -47,6 +54,9 @@ import getpass
 import urllib.request
 import webbrowser
 import http.server
+import threading
+import subprocess
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -71,6 +81,8 @@ PBKDF2_ITER = 150000
 AUTH_TAG = b"ETF-DASH-V1"
 FILTER_BUFFER = 30             # 自动选池时多取的候选数（用于相关性去重）
 REFRESH_SECONDS = 30           # 页面实时价刷新间隔（登录成功后才启动）
+POOL_SIZE_DEFAULT = 60         # 默认标的池大小（--pool-size N 可覆盖）
+RERUN_TIMEOUT = 600            # 网页端触发重跑的子进程超时（秒）
 
 # ---------------------------------------------------------------- 核心池（与 STRATEGY.md 一致，强制保底）
 CORE_POOL = [
@@ -146,6 +158,9 @@ def classify(name):
         return "债券"
     if any(k in name for k in ("恒生", "港股", "中概", "国企", "H股", "HK")):
         return "港股"
+    if any(k in name for k in ("巴西", "日经", "亚太", "印度", "东南亚", "亚洲",
+                               "法国", "德国", "沙特", "海外", "全球", "世界")):
+        return "海外"
     if any(k in name for k in ("纳指", "纳斯达克", "标普", "美股", "美国", "海外")):
         return "美股"
     if any(k in name for k in ("黄金", "豆粕", "有色", "油气", "原油", "能源化工", "商品")):
@@ -899,135 +914,185 @@ def gauge_svg(value, w=200, h=112):
 
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#f4f6f9;--card:#fff;--line:#e6e9ef;--line2:#f0f2f6;--tx:#1d2330;--tx2:#5b6472;
---tx3:#8a93a3;--up:#e5484d;--down:#17a673;--flat:#b78103;--brand:#2563eb;
---shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.06);--radius:16px}
-body{background:var(--bg);color:var(--tx);font-size:14px;line-height:1.6;padding:28px 20px 48px;
+:root{--bg:#f6f7f9;--card:#fff;--line:#e7eaef;--line2:#eef0f4;--tx:#171c26;--tx2:#4c5566;
+--tx3:#6d7686;--up:#d93a3f;--down:#128a5c;--flat:#b78103;--brand:#2563eb;
+--shadow-sm:0 1px 2px rgba(16,24,40,.04);--shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.06);--radius:16px;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Courier New",monospace}
+body{background:
+radial-gradient(1000px 420px at 85% -160px,rgba(37,99,235,.055),transparent 62%),
+radial-gradient(760px 340px at -120px 12%,rgba(37,99,235,.038),transparent 60%),var(--bg);
+color:var(--tx);font-size:14px;line-height:1.6;padding:30px 20px 52px;
 font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
 -webkit-font-smoothing:antialiased}
 .wrap{max-width:1180px;margin:0 auto}
-.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:18px}
-.title{font-size:24px;font-weight:700;letter-spacing:-.4px}
-.title .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--up);margin-right:9px;vertical-align:2px}
-.sub{color:var(--tx2);font-size:13px;margin-top:4px}
-.stamp{text-align:right;color:var(--tx3);font-size:12.5px;line-height:1.6}
-.stamp b{color:var(--tx);font-weight:600}
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:20px}
+.title{font-size:27px;font-weight:800;letter-spacing:-.6px}
+.title .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--up);margin-right:10px;vertical-align:2px}
+.sub{color:var(--tx2);font-size:13px;margin-top:5px}
+.sub b{font-variant-numeric:tabular-nums}
+.stamp{text-align:right;color:var(--tx3);font-size:12.5px;line-height:1.7}
+.stamp b{color:var(--tx);font-weight:600;font-variant-numeric:tabular-nums}
 .live{display:inline-flex;align-items:center;gap:6px;background:#eef8f3;border:1px solid #cfead9;
-color:#137a52;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600}
+color:#137a52;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.mkt{display:inline-flex;align-items:center;font-weight:800;font-size:15px}
 .live .pulse{width:6px;height:6px;border-radius:50%;background:#17a673;animation:pulse 1.6s infinite}
 .lock{margin-left:8px;border:1px solid var(--line);background:#fff;color:var(--tx2);border-radius:8px;
 padding:1px 9px;font-size:12px;line-height:1.6;cursor:pointer;font-family:inherit;transition:all .15s}
 .lock:hover{border-color:#cfd6e2;color:var(--tx);background:#fafbfd}
-@keyframes pulse{0%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(1.5)}100%{opacity:1;transform:scale(1)}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
-.sentiment{padding:20px 22px 18px;margin-bottom:18px}
-.sec-title{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:14px}
-.sec-title .bar{width:3px;height:14px;border-radius:2px;background:var(--brand)}
-.sec-title .tail{margin-left:auto;font-weight:400;color:var(--tx3);font-size:12px}
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
-.kpi{background:#fafbfd;border:1px solid var(--line2);border-radius:12px;padding:14px 16px}
-.kpi .lab{color:var(--tx3);font-size:12px;letter-spacing:.3px}
-.kpi .val{font-size:22px;font-weight:700;margin:6px 0 2px;font-variant-numeric:tabular-nums}
-.kpi .desc{font-size:12px;color:var(--tx2)}
-.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:999px;font-size:12.5px;font-weight:600}
+.lock:focus-visible,.lock.rerun:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.lock.rerun{color:var(--brand);border-color:#c7d7f5;background:#f5f8ff;font-weight:600}
+.lock.rerun:hover{background:#ecf2fe;border-color:#a9c3f0}
+.lock.rerun:disabled{color:#8aa0c8;border-color:#dbe3f0;background:#f3f6fc;cursor:default}
+.lock.rerun{color:var(--brand);border-color:#c7d7f5;background:#f5f8ff;font-weight:600}
+.lock.rerun:hover{background:#ecf2fe;border-color:#a9c3f0}
+.lock.rerun:disabled{color:#8aa0c8;border-color:#dbe3f0;background:#f3f6fc;cursor:default}
+#rerun-state{display:block;min-height:18px;font-size:12px;color:var(--tx3)}
+@keyframes pulse{0%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.45)}100%{opacity:1;transform:scale(1)}}
+@keyframes rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+@media (prefers-reduced-motion: no-preference){
+  .sentiment,.top3 .etf,.cand{animation:rise .42s cubic-bezier(.16,1,.3,1) backwards}
+  .top3 .etf:nth-child(1){animation-delay:.05s}
+  .top3 .etf:nth-child(2){animation-delay:.12s}
+  .top3 .etf:nth-child(3){animation-delay:.19s}
+  .cand{animation-delay:.24s}
+  .gate-box.shake{animation:shake .3s}
+}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
+.sentiment{padding:20px 22px 16px;margin-bottom:20px}
+.sec-title{font-size:15px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:16px}
+.sec-title .bar{width:4px;height:15px;border-radius:2px;background:var(--brand)}
+.sec-title .ic{display:inline-flex;color:var(--brand)}
+.sec-title .ic svg{width:16px;height:16px}
+.sec-title .tail{margin-left:auto;font-weight:400;color:var(--tx3);font-size:12.5px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:0}
+.kpi{padding:2px 18px;border-left:1px solid var(--line2)}
+.kpi:first-child{border-left:none;padding-left:2px}
+.kpi .lab{color:var(--tx3);font-size:12px;letter-spacing:.3px;display:flex;align-items:center;gap:6px}
+.kpi .lab .icon{display:inline-flex;color:var(--tx3)}
+.kpi .lab .icon svg{width:14px;height:14px}
+.kpi .val{font-size:24px;font-weight:750;margin:8px 0 4px;font-variant-numeric:tabular-nums}
+.kpi .desc{font-size:12px;color:var(--tx3)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2.5px 11px;border-radius:999px;font-size:12.5px;font-weight:650}
+.pill::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85}
 .pill.bull{background:#fdecec;color:var(--up)}.pill.flat{background:#fdf6e6;color:var(--flat)}
 .pill.bear{background:#e8f7f0;color:var(--down)}
 .dist{display:flex;height:8px;border-radius:999px;overflow:hidden;background:#eceff3;margin:10px 0 8px}
 .dist i{display:block;height:100%}
 .dist .i-bull{background:var(--up)}.dist .i-flat{background:#e2c96a}.dist .i-bear{background:var(--down)}
 .dist-lab{display:flex;gap:14px;font-size:12px;color:var(--tx2)}
-.dist-lab b{font-variant-numeric:tabular-nums}
-.dist-lab span::before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+.dist-lab b{font-variant-numeric:tabular-nums;color:var(--tx)}
+.dist-lab span::before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;opacity:.9}
 .dist-lab .l-bull::before{background:var(--up)}.dist-lab .l-flat::before{background:#e2c96a}
 .dist-lab .l-bear::before{background:var(--down)}
 .gauge-wrap{display:flex;align-items:center;gap:12px}
 .gauge{width:150px;height:84px;flex:none}
-.gauge-val{font-size:28px;font-weight:700}.gauge-sub{font-size:11px;fill:#8a93a3}.gauge-lab{font-size:11px;fill:#a3abba}
-.risks{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
-.risks .lab{font-size:12px;color:var(--tx3);margin-bottom:8px}
+.gauge-val{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}
+.gauge-sub{font-size:11px;fill:#6d7686}.gauge-lab{font-size:11px;fill:#6d7686}
+.risks{margin-top:14px;padding-top:12px;border-top:1px solid var(--line2);display:flex;align-items:baseline;gap:10px}
+.risks .lab{font-size:12px;color:var(--tx3);flex:none}
+.risks .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{background:#f6f8fb;border:1px solid var(--line2);color:var(--tx2);border-radius:8px;padding:3px 10px;font-size:12px}
-.chip.warn{background:#fdf3f3;border-color:#f7dede;color:#b3392f}
+.chip.warn{background:#fdf3f3;border-color:#f7dede;color:#a9372e}
+.chip-soft{background:#f6f8fb;border:1px solid var(--line2);color:var(--tx3);border-radius:8px;padding:3px 10px;font-size:12px}
 .top3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .etf{padding:0;overflow:hidden;display:flex;flex-direction:column;transition:transform .18s ease,box-shadow .18s ease}
 .etf:hover{transform:translateY(-2px);box-shadow:0 4px 10px rgba(16,24,40,.06),0 16px 34px rgba(16,24,40,.09)}
 .etf-head{padding:16px 18px 12px;border-bottom:1px solid var(--line2)}
 .row1{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.rank{width:22px;height:22px;border-radius:6px;background:#1d2330;color:#fff;font-size:12px;font-weight:700;
+.rank{width:23px;height:23px;border-radius:7px;background:#222836;color:#fff;font-size:12.5px;font-weight:700;
 display:flex;align-items:center;justify-content:center;flex:none}
 .rank.r1{background:linear-gradient(135deg,#f0a020,#e5484d)}
 .rank.r2{background:linear-gradient(135deg,#9aa4b5,#6b7280)}
 .rank.r3{background:linear-gradient(135deg,#c79a68,#a3733c)}
-.ename{font-size:16px;font-weight:700}.ecode{color:var(--tx3);font-size:12px;font-variant-numeric:tabular-nums}
+.ename{font-size:16.5px;font-weight:750;letter-spacing:-.2px}
+.ecode{color:var(--tx3);font-size:12px;font-variant-numeric:tabular-nums}
 .cat{margin-left:auto;font-size:11.5px;color:var(--tx2);background:#f1f4f9;border:1px solid var(--line2);
 border-radius:6px;padding:2px 8px;white-space:nowrap}
 .row2{display:flex;align-items:baseline;gap:10px}
-.price{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
-.chg{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.price{font-size:28px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.6px;font-feature-settings:"tnum"}
+.chg{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums}
 .spark-wrap{padding:6px 0 0;background:linear-gradient(180deg,#fbfcfe,#fff)}
 .spark{display:block;width:100%;height:88px}
 .body{padding:14px 18px 16px;display:flex;flex-direction:column;gap:12px;flex:1}
 .score-row{display:flex;align-items:center;gap:10px}
 .score-row .s-lab{font-size:12px;color:var(--tx3);flex:none}
-.bar{flex:1;height:7px;border-radius:999px;background:#eceff3;overflow:hidden}
-.bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#8aa7f5,#2563eb)}
+.bar{flex:1;height:6px;border-radius:999px;background:#eceff3;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#6d94f2,#2563eb)}
 .score-row .s-val{font-weight:700;font-variant-numeric:tabular-nums;color:var(--brand);font-size:14px;flex:none}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px}
 .kv{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;
 border-bottom:1px dotted var(--line);padding-bottom:4px}
-.kv .k{color:var(--tx3)}.kv .v{font-variant-numeric:tabular-nums;font-weight:600}
+.kv .k{color:var(--tx3)}
+.kv .v{font-variant-numeric:tabular-nums;font-weight:650;font-feature-settings:"tnum"}
 .rsi-bar{position:relative;height:6px;border-radius:999px;margin-top:5px;
 background:linear-gradient(90deg,#17a673 0%,#e2c96a 45%,#e2c96a 60%,#e5484d 100%);opacity:.85}
 .rsi-bar i{position:absolute;top:-3px;width:2px;height:12px;background:#1d2330;border-radius:2px}
-.plan{background:#fafbfd;border:1px solid var(--line2);border-radius:12px;padding:12px 14px}
+.plan{background:#fafbfc;border:1px solid var(--line2);border-radius:12px;padding:12px 14px}
 .plan-hd{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-.act{padding:2px 11px;border-radius:999px;font-size:13px;font-weight:700;flex:none}
-.act.buy{background:#fdecec;color:#c2342d}.act.hold{background:#eaf1fd;color:#2a55b8}
-.act.sell{background:#e8f7f0;color:#137a52}.act.muted{background:#f1f3f6;color:#6b7280}
+.act{display:inline-flex;align-items:center;gap:6px;padding:2.5px 11px;border-radius:999px;font-size:13px;font-weight:700;flex:none}
+.act::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.9}
+.act.buy{background:#fdecec;color:#b33530}.act.hold{background:#eaf1fd;color:#2a55b8}
+.act.sell{background:#e8f7f0;color:#0f7a53}.act.muted{background:#f1f3f6;color:#5f6875}
 .plan-hd .why{font-size:12px;color:var(--tx2);line-height:1.4}
 .plan-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px}
-.cell{background:#fff;border:1px solid var(--line2);border-radius:9px;padding:8px 10px}
+.cell{background:#fff;border:1px solid var(--line2);border-radius:10px;padding:8px 11px}
 .cell .cl{font-size:11px;color:var(--tx3)}
-.cell .cv{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:1px}
+.cell .cv{font-size:14.5px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:1px;font-feature-settings:"tnum"}
 .cell .cx{font-size:11px;color:var(--tx3)}
 .pos{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tx2)}
-.pos b{color:var(--tx);font-variant-numeric:tabular-nums}
+.pos b{color:var(--tx);font-variant-numeric:tabular-nums;font-weight:750}
+.plan .rsi-bar i{transition:left .45s cubic-bezier(.16,1,.3,1)}
 .gline{display:flex;gap:6px;margin-top:8px;font-size:11.5px;color:var(--tx3);flex-wrap:wrap}
 .gline code{background:#fff;border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:var(--tx2);
 font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .reasons{display:flex;flex-wrap:wrap;gap:6px}
-.reason{font-size:11.5px;color:var(--tx2);background:#f6f8fb;border-radius:6px;padding:2px 8px}
+.reason{font-size:11.5px;color:var(--tx2);background:#f6f8fb;border:1px solid var(--line2);border-radius:6px;padding:2px 8px}
 .cand{padding:16px 20px 18px;margin-top:18px}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-weight:600;color:var(--tx3);font-size:12px;padding:6px 8px;border-bottom:1px solid var(--line)}
-td{padding:8px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums}
+th{text-align:left;font-weight:600;color:var(--tx3);font-size:12px;padding:7px 8px;border-bottom:1px solid var(--line)}
+td{padding:8px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+th:nth-child(n+3),td:nth-child(n+3){text-align:right}
 td.nm{font-variant-numeric:normal;font-weight:600}
 td .cd{color:var(--tx3);font-weight:400;font-size:12px;margin-left:6px}
 .dot-s{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
-tbody tr:hover{background:#fafbfd}
-.foot{margin-top:20px;color:var(--tx3);font-size:12px;line-height:1.7}
-.foot b{color:var(--tx2)}
-@media(max-width:960px){.top3{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:560px){body{padding:16px 12px 32px}.kpis{grid-template-columns:1fr}.plan-grid{grid-template-columns:1fr}}
+tbody tr:nth-child(even){background:#f6f8fa}
+tbody tr:hover{background:#f3f7ff}
+.foot{margin-top:22px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+box-shadow:var(--shadow-sm);padding:16px 20px;color:var(--tx3);font-size:12px;line-height:1.75}
+.foot b{color:var(--tx2);font-weight:650}
+.foot hr{border:none;border-top:1px solid var(--line2);margin:10px 0}
+@media(max-width:960px){.top3{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}
+.kpi:nth-child(3){border-left:none;padding-left:2px}}
+@media(max-width:560px){body{padding:16px 12px 32px}.kpis{grid-template-columns:1fr}
+.kpi{border-left:none;padding-left:2px}.plan-grid{grid-template-columns:1fr}.title{font-size:22px}}
 /* -------- 登录门禁 -------- */
 #gate{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
-background:linear-gradient(160deg,#eef2f8,#f7f9fc);z-index:99}
-.gate-box{width:340px;background:#fff;border:1px solid var(--line);border-radius:18px;
-box-shadow:0 20px 60px rgba(16,24,40,.14);padding:28px 26px 24px}
-.gate-box .logo{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#2563eb,#4f7df0);
-display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:17px;margin-bottom:14px}
-.gate-box h2{font-size:17px;font-weight:700}
-.gate-box p{color:var(--tx2);font-size:12.5px;margin:4px 0 18px}
+background:
+radial-gradient(900px 460px at 78% -140px,rgba(37,99,235,.08),transparent 62%),
+radial-gradient(700px 380px at -100px 20%,rgba(37,99,235,.05),transparent 60%),
+linear-gradient(165deg,#eef1f6,#f8fafc);z-index:99}
+.gate-box{width:352px;background:#fff;border:1px solid var(--line);border-radius:20px;
+box-shadow:0 24px 70px rgba(16,24,40,.16);padding:30px 28px 24px}
+.gate-box .logo{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#2563eb,#4f7df0);
+display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:17px;margin-bottom:16px}
+.gate-box h2{font-size:18px;font-weight:800;letter-spacing:-.3px}
+.gate-box p{color:var(--tx2);font-size:12.5px;margin:5px 0 18px}
 .gate-box input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;
-outline:none;transition:border-color .15s,box-shadow .15s}
-.gate-box input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
-.gate-box button{width:100%;margin-top:12px;padding:10px;border:none;border-radius:10px;background:var(--brand);
-color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}
+outline:none;transition:border-color .15s,box-shadow .15s;font-variant-numeric:tabular-nums}
+.gate-box input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(37,99,235,.13)}
+.gate-box input[type="checkbox"]{width:auto;margin:0;accent-color:var(--brand);flex:none}
+.gate-box button{width:100%;margin-top:12px;padding:10.5px;border:none;border-radius:10px;background:var(--brand);
+color:#fff;font-size:14px;font-weight:650;cursor:pointer;transition:background .15s,transform .06s}
 .gate-box button:hover{background:#1d4fd8}
+.gate-box button:active{transform:scale(.985)}
 .gate-box button:disabled{background:#9db4ef;cursor:default}
-.gate-err{color:#c2342d;font-size:12.5px;margin-top:10px;min-height:18px}
+.gate-err{color:#b33530;font-size:12.5px;margin-top:10px;min-height:18px}
+.gate-warn{color:#a9700c;background:#fdf6e6;border:1px solid #f0e2bb;border-radius:9px;
+padding:7px 11px;font-size:11.5px;line-height:1.55;margin-top:12px;display:none}
 .gate-opt{display:flex;align-items:center;gap:6px;margin-top:12px;font-size:12px;color:var(--tx3)}
-.gate-tip{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);font-size:11.5px;color:var(--tx3);line-height:1.6}
+.gate-tip{margin-top:14px;padding-top:12px;border-top:1px solid var(--line2);font-size:12px;color:var(--tx2);line-height:1.65}
 #app{display:none}
 """
 
@@ -1271,6 +1336,41 @@ function startLive(){
     window.addEventListener('beforeunload', leave);
   }
 
+  // 一键重跑：让本地服务重新生成看板（--serve 模式；file:// 打开时给出提示）
+  const rrBtn = el('rerunBtn');
+  if (rrBtn){
+    rrBtn.addEventListener('click', async () => {
+      if (rrBtn.dataset.busy === '1') return;
+      rrBtn.dataset.busy = '1';
+      rrBtn.disabled = true;
+      rrBtn.textContent = '◌ 重跑中…';
+      set('rerun-state', '正在重跑生成脚本（抓行情 → 重算指标与打分 → 重新生成页面），约需几秒到几十秒…', '#b78103');
+      let data = null;
+      try{
+        const resp = await fetch('/api/rerun', { method: 'POST' });
+        data = await resp.json().catch(() => null);
+        if (!data) set('rerun-state', '⚠ 服务返回异常（HTTP ' + resp.status + '）', '#b78103');
+      }catch(e){
+        set('rerun-state', '⚠ 本地服务未响应：若当前是双击 file:// 打开的页面，请先运行 ' +
+                           'python fund-strategy/etf_dashboard.py --serve 并从浏览器访问', '#b78103');
+      }
+      if (data && data.ok){
+        if (store.get('etf_pw')){
+          set('rerun-state', '✅ ' + data.message + '（用时 ' + data.seconds + 's），正在刷新…', '#137a52');
+          setTimeout(() => { try{ location.reload(); }catch(e){} }, 1000);
+        }else{
+          set('rerun-state', '✅ 打分已更新（用时 ' + data.seconds + 's），请刷新页面（F5）查看新结果', '#137a52');
+          rrBtn.dataset.busy = '0'; rrBtn.disabled = false; rrBtn.textContent = '↻ 重跑打分';
+        }
+      }else if (data && !data.ok){
+        set('rerun-state', '⚠ ' + data.message, '#b78103');
+        rrBtn.dataset.busy = '0'; rrBtn.disabled = false; rrBtn.textContent = '↻ 重跑打分';
+      }else{
+        rrBtn.dataset.busy = '0'; rrBtn.disabled = false; rrBtn.textContent = '↻ 重跑打分';
+      }
+    });
+  }
+
   // ③ 手动锁定：停定时器 + 清会话口令 + 回到登录页
   const lock = el('lockBtn');
   if (lock){
@@ -1297,6 +1397,8 @@ async function submit(){
     const html = await tryUnlock(pw);
     if (html === null){
       err.textContent = '口令不对，请重试';
+      const box = document.querySelector('.gate-box');
+      if (box){ box.classList.remove('shake'); void box.offsetWidth; box.classList.add('shake'); }
       btn.disabled = false; btn.textContent = '进入看板';
       el('pw').select();
       return;
@@ -1322,8 +1424,8 @@ function wire(){
     const app = el('app'); if (app) app.style.display = 'block';
     startLive(); return;
   }
-  if (!hasSubtle() && el('tip')){
-    el('tip').innerHTML = '当前环境未提供 WebCrypto，已切换到内置 JS 解密实现（略慢，功能不变）。';
+  if (!hasSubtle() && el('warn')){
+    el('warn').style.display = 'block';
   }
   el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
   el('btn').addEventListener('click', submit);
@@ -1341,10 +1443,11 @@ GATE_HTML = '''
     <h2>ETF 策略看板</h2>
     <p>本页内容已加密，请输入访问口令</p>
     <input id="pw" type="password" placeholder="访问口令" autocomplete="current-password">
-    <button id="btn">进入看板</button>
-    <div class="gate-err" id="err"></div>
+    <button id="btn" type="button">进入看板</button>
+    <div class="gate-err" id="err" role="alert"></div>
+    <div class="gate-warn" id="warn">当前环境未提供 WebCrypto，已切换到内置 JS 解密实现，速度略慢、功能不变。</div>
     <label class="gate-opt"><input type="checkbox" id="remember"> 本次浏览器会话内记住（关闭窗口失效）</label>
-    <div class="gate-tip" id="tip">口令保存在本机 dashboard/.secret.json（已加入 .gitignore，请勿外传）</div>
+    <div class="gate-tip" id="tip">口令保存在本机 dashboard/.secret.json，该文件已加入&nbsp;.gitignore，请勿外传。</div>
   </div>
 </div>
 '''
@@ -1364,8 +1467,8 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
     fg = senti["fear_greed"]
 
     kpis = f'''
-    <div class="kpi">
-      <div class="lab">大盘趋势 · 沪深300ETF</div>
+      <div class="kpi">
+      <div class="lab"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></span>大盘趋势 · 沪深300ETF</div>
       <div class="val" style="font-size:20px">
         <span class="pill {STATE_STYLE.get(senti['market'], ('flat', '#b78103'))[0]}">{senti['market']}</span>
       </div>
@@ -1374,7 +1477,7 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
         <span id="rt-510300-c" style="color:{col(hpct)};font-weight:600">{pct_txt(hpct)}</span></div>
     </div>
     <div class="kpi">
-      <div class="lab">恐慌贪婪指数</div>
+      <div class="lab"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19a9 9 0 1 1 14 0"/><path d="M12 15l4-5"/></svg></span>恐慌贪婪指数</div>
       <div class="gauge-wrap">
         {gauge_svg(fg)}
         <div><div style="font-weight:700;font-size:15px">{senti['fg_state']}</div>
@@ -1383,7 +1486,7 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
       </div>
     </div>
     <div class="kpi">
-      <div class="lab">池内多空分布（{tot} 只）</div>
+      <div class="lab"><span class="icon"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="11" width="3.6" height="9" rx="1"/><rect x="10.2" y="6" width="3.6" height="14" rx="1"/><rect x="16.4" y="3" width="3.6" height="17" rx="1"/></svg></span>池内多空分布（{tot} 只）</div>
       <div class="val" style="font-size:19px">
         <span style="color:var(--up)">{senti['bull']}</span> /
         <span style="color:#c9a227">{senti['flat']}</span> /
@@ -1396,9 +1499,9 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
         <span class="l-bear">空头 <b>{pw(senti['bear']):.0f}%</b></span></div>
     </div>
     <div class="kpi">
-      <div class="lab">相对强弱（轮动视角）</div>
-      <div class="desc" style="margin-top:6px"><b style="color:var(--tx3)">近5日</b><br>{esc(s5)}</div>
-      <div class="desc" style="margin-top:8px"><b style="color:var(--tx3)">近20日</b><br>{esc(s20)}</div>
+      <div class="lab"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 7-8"/><path d="M14 7h6v6"/></svg></span>相对强弱（轮动视角）</div>
+      <div class="desc" style="margin-top:9px;display:flex;align-items:baseline;gap:8px"><b style="color:var(--tx3);flex:none">近5日</b><span>{esc(s5)}</span></div>
+      <div class="desc" style="margin-top:7px;display:flex;align-items:baseline;gap:8px"><b style="color:var(--tx3);flex:none">近20日</b><span>{esc(s20)}</span></div>
     </div>'''
 
     risk_chips = "".join(f'<span class="chip warn">{esc(r)}</span>' for r in senti["risks"])
@@ -1432,7 +1535,7 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
         <div class="etf-head">
           <div class="row1"><span class="rank r{idx}">{idx}</span>
             <span class="ename">{esc(r['name'])}</span><span class="ecode">{r['code']}</span>
-            <span class="cat">{esc(r['cat'])}</span></div>
+            <span class="cat">{esc(r['cat'])}</span><span class="icon" style="margin-left:6px;display:inline-flex;color:var(--tx3)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span></div>
           <div class="row2"><span class="price" id="rt-{r['code']}-p">{fmt(ind['close'])}</span>
             <span class="chg" id="rt-{r['code']}-c" style="color:{col(ind['pct_chg'])}">{pct_txt(ind['pct_chg'])}</span>
             <span class="pill {st_cls}">{r['state']}</span></div>
@@ -1441,10 +1544,10 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
         <div class="body">
           <div class="score-row"><span class="s-lab">综合评分</span>
             <span class="bar"><i style="width:{min(max(r['score'], 0), 10) * 10:.0f}%"></i></span>
-            <span class="s-val">{r['score']}/10</span></div>
+            <span class="s-val">{r['score']}<span style="color:var(--tx3);font-weight:500"> /10</span></span></div>
           <div class="grid2">{kv_html}</div>
-          <div><div class="kv" style="border:none;padding:0"><span class="k">RSI 位置</span>
-            <span class="v">{rsi}</span></div>
+          <div><div class="kv" style="border:none;padding:0;margin-bottom:2px"><span class="k">RSI 位置</span>
+            <span class="v" style="font-variant-numeric:tabular-nums">{rsi}</span></div>
             <div class="rsi-bar"><i style="left:{max(0, min(100, rsi)):.1f}%"></i></div></div>
           <div class="plan">
             <div class="plan-hd"><span class="act {act_cls}">{esc(r['action'])}</span>
@@ -1489,21 +1592,26 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
         （核心 {core_size} 只 + 全市场成交额优选 {max(pool_size - core_size, 0)} 只）</div>
     </div>
     <div class="stamp">
-      <span class="live"><span class="pulse"></span>每 {REFRESH_SECONDS} 秒自动刷新 · <span id="rt-tick">{REFRESH_SECONDS}</span>s</span>
-      <button class="lock" id="lockBtn" type="button" title="停止刷新并回到登录页">锁定</button><br>
+      <span class="live"><span class="pulse"></span>自动刷新 <span id="rt-tick">{REFRESH_SECONDS}</span>s</span>
+      <button class="lock" id="lockBtn" type="button" title="停止刷新并回到登录页">锁定</button>
+      <button class="lock rerun" id="rerunBtn" type="button"
+        title="让本地服务重新运行生成脚本，更新打分与 Top3（--serve 模式下可用）">↻ 重跑打分</button>
       数据日期 <b>{data_date}</b> ｜ 实时 <b id="rt-time">—</b><br>
+      <span id="rerun-state"></span>
       <span id="rt-state">等待首次拉取…</span>
     </div>
   </div>
 
   <section class="card sentiment">
     <div class="sec-title"><span class="bar"></span>今日市场情绪扫描</div>
-    <div class="kpis">{kpis}</div>
+    <div class="kpis" style="margin-top:2px">{kpis}</div>
     <div class="risks"><div class="lab">主要风险点</div><div class="chips">{risk_chips}</div></div>
   </section>
 
-  <div class="sec-title" style="margin:22px 0 14px"><span class="bar"></span>今日重点推荐 ETF · Top 3
-    <span style="font-size:12px;font-weight:400;color:var(--tx3);margin-left:10px">基于 {data_date} 收盘数据打分，重跑脚本即更新；卡片价格为实时刷新</span></div>
+  <div class="sec-title" style="margin:24px 0 14px"><span class="bar"></span>
+    <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M6 3h12v6a6 6 0 0 1-12 0V3Z"/><path d="M6 5H4a2 2 0 0 0 2 4M18 5h2a2 2 0 0 1-2 4"/></svg></span>
+    今日重点推荐 ETF · Top 3
+    <span class="tail" style="margin-left:auto">基于 {data_date} 收盘数据打分 · 卡片价格为实时刷新</span></div>
   <section class="top3">{"".join(cards)}</section>
 
   <section class="card cand">
@@ -1521,9 +1629,10 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
     <b>风控</b>：网格单 -5% 止损、趋势单 -8% 止损、收盘跌破 MA60 次日清仓；账户回撤 ≥8% 降仓至 50%、≥12% 降至 30%、≥15% 清仓休整。<br>
     <b>选池</b>：{core_size} 只核心池固定保底 + 东财全市场 ETF 按成交额降序补充，剔除货币/现金/债券类，同一指数只保留成交额最大的一只。<br>
     <b>数据</b>：日K 用腾讯/新浪公开行情（前复权）算指标，实时价来自腾讯 qt.gtimg.cn，每 {REFRESH_SECONDS} 秒重拉；共 {tot} 只样本。<br>
+    <hr>
     <b>流量控制</b>：登录成功前不发起任何行情请求；<b>标签页切到后台自动暂停</b>、<b>离开页面立即停止</b>，
     上一轮未返回不发下一轮；点右上角「锁定」可随时停止刷新并回到登录页。右上角状态栏显示已拉取次数与累计流量。<br>
-    <b>刷新</b>：重新运行 <code style="font-family:ui-monospace,Consolas,monospace">python fund-strategy/etf_dashboard.py</code> 更新指标与打分。<br>
+    <b>刷新</b>：指标与打分为生成时快照 —— 点右上角「↻ 重跑打分」让本地服务重算（--serve 模式），或重新运行 <code style="font-family:ui-monospace,Consolas,monospace">python fund-strategy/etf_dashboard.py</code>；卡片价格每 {REFRESH_SECONDS} 秒自动刷新。<br>
     ⚠️ 本页面仅为量化策略研究参考，基于公开市场数据生成，<b>不构成任何投资建议</b>。市场有风险，投资需谨慎。
   </div>
   <div id="codes" hidden data-codes='{json.dumps(live_codes)}' data-interval='{REFRESH_SECONDS}'></div>'''
@@ -1582,7 +1691,38 @@ def save_state(today, codes, data_date):
         pass
 
 
-def serve(port=8899):
+class _RerunState:
+    """网页端「重跑打分」的跨线程互斥状态（--serve 模式专用）"""
+
+    lock = threading.Lock()
+    running = False
+
+
+def _rerun_dashboard(rerun_args):
+    """子进程重跑本脚本（等价于在命令行重新执行一遍），返回 (是否成功, 输出尾部)。
+
+    子进程按 obtain_password 的既有优先级自行取回本机已保存口令，
+    不会卡在交互输入，也无需在这里转传任何敏感信息。
+    """
+    env = dict(os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    flags = 0x08000000 if os.name == "nt" else 0             # Windows: CREATE_NO_WINDOW
+    cmd = [sys.executable, os.path.abspath(__file__)] + list(rerun_args)
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=RERUN_TIMEOUT, cwd=BASE, env=env,
+                          creationflags=flags)
+    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    return proc.returncode == 0, out[-4000:]
+
+
+def serve(port=8899, rerun_args=None):
+    """本地服务：静态页面 + POST /api/rerun（网页端触发重跑打分）。
+
+    仅监听 127.0.0.1；/api/rerun 校验请求来源 Origin，只接受本机页面
+    （127.0.0.1 / localhost 同源）发出的请求，防其它网站跨站触发。
+    """
+    allowed_origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=OUT_DIR, **kw)
@@ -1594,9 +1734,59 @@ def serve(port=8899):
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
 
+        # ---- 网页端一键重跑打分 ----
+        def _json(self, code, obj):
+            body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _handle_rerun(self):
+            origin = self.headers.get("Origin") or ""
+            if origin and origin not in allowed_origins:
+                return self._json(403, {"ok": False,
+                                        "message": "已拒绝非本机页面的重跑请求（跨站保护）"})
+            if _RerunState.running:
+                return self._json(409, {"ok": False, "message": "已有一次重跑正在进行，请稍候"})
+            with _RerunState.lock:
+                if _RerunState.running:
+                    return self._json(409, {"ok": False, "message": "已有一次重跑正在进行，请稍候"})
+                _RerunState.running = True
+            try:
+                t0 = datetime.now()
+                ok, out = _rerun_dashboard(rerun_args or [])
+                took = (datetime.now() - t0).total_seconds()
+                print(f"🔁 网页端触发重跑：{'成功' if ok else '失败'}，用时 {took:.1f}s")
+                if not ok:
+                    print(out)
+                return self._json(200 if ok else 500, {
+                    "ok": ok, "seconds": round(took, 1),
+                    "message": ("打分已更新，页面即将刷新" if ok
+                                else "重跑失败，详见本机服务控制台"),
+                    "log": out})
+            except subprocess.TimeoutExpired:
+                return self._json(500, {"ok": False, "message": "重跑超时（>10 分钟），已放弃"})
+            except Exception as e:                              # noqa: BLE001
+                return self._json(500, {"ok": False, "message": f"重跑异常：{e}"})
+            finally:
+                _RerunState.running = False
+
+        def do_GET(self):
+            if self.path.split("?", 1)[0] == "/api/rerun":
+                return self._json(405, {"ok": False, "message": "请用 POST 请求 /api/rerun"})
+            return super().do_GET()
+
+        def do_POST(self):
+            if self.path.split("?", 1)[0] == "/api/rerun":
+                return self._handle_rerun()
+            self.send_error(404)
+
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/index.html"
     print(f"🌐 本地服务已启动：{url}（Ctrl+C 结束）")
+    print("   ✚ 已启用网页端「↻ 重跑打分」按钮（POST /api/rerun，仅监听 127.0.0.1）")
     webbrowser.open(url)
     try:
         httpd.serve_forever()
@@ -1613,10 +1803,17 @@ def main():
     do_serve = "--serve" in argv
     set_pw = "--set-password" in argv
 
-    pool_size = 60
+    pool_size = POOL_SIZE_DEFAULT
     if "--pool-size" in argv:
         try:
             pool_size = int(argv[argv.index("--pool-size") + 1])
+        except Exception:                                       # noqa: BLE001
+            pass
+
+    port = 8899
+    if "--port" in argv:
+        try:
+            port = int(argv[argv.index("--port") + 1])
         except Exception:                                       # noqa: BLE001
             pass
 
@@ -1684,8 +1881,17 @@ def main():
         secret["password"] = password
 
     html = build_html(body, password, secret)
-    with open(OUT_HTML, "w", encoding="utf-8") as f:
+    tmp_html = OUT_HTML + ".tmp"
+    with open(tmp_html, "w", encoding="utf-8") as f:
         f.write(html)
+    for attempt in range(6):            # 原子替换；Windows 下目标文件被占用时稍候重试
+        try:
+            os.replace(tmp_html, OUT_HTML)
+            break
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.25)
 
     print(f"\n📊 大盘：{senti['market']} ｜ 恐慌贪婪 {senti['fear_greed']}/100（{senti['fg_state']}）"
           f" ｜ 多头 {senti['bull']} / 震荡 {senti['flat']} / 空头 {senti['bear']}")
@@ -1699,7 +1905,16 @@ def main():
         print("🔐 已加密：打开页面需输入口令（--no-auth 生成明文版；--serve 起本地服务打开）")
         print(f"AUTH_CODE: {password}")
     if do_serve:
-        serve()
+        rerun_args = []
+        if core_only:
+            rerun_args.append("--core-only")
+        if no_auth:
+            rerun_args.append("--no-auth")
+        if offline:
+            rerun_args.append("--offline")
+        if "--pool-size" in argv:
+            rerun_args += ["--pool-size", str(pool_size)]
+        serve(port, rerun_args)
 
 
 if __name__ == "__main__":

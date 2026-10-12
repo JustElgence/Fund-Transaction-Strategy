@@ -50,7 +50,7 @@ python3 fund-strategy/etf_dashboard.py
 # 输出到 fund-strategy/dashboard/index.html
 ```
 
-### 📺 HTML 看板（`fund-strategy/etf_dashboard.py`，v2.0）
+### 📺 HTML 看板（`fund-strategy/etf_dashboard.py`，v2.1）
 
 - **零依赖**：只用 Python 标准库。日K 用腾讯 / 新浪，ETF 清单用新浪（东财兜底）。
 - **标的池可扩展**：默认 **25 只核心池（STRATEGY.md 固定清单，强制保底）+ 全市场自动优选 35 只 = 60 只**。
@@ -69,6 +69,14 @@ python3 fund-strategy/etf_dashboard.py
   - ⚠️ 注意：行情请求是**访客浏览器 → 腾讯接口直连**，不经过你的服务器；
     服务器侧只承担页面本身（约 60KB / 次首次加载，后续可被浏览器缓存）。
     实测单次 14 只报价约 7.4KB，30 秒一次约 **0.9MB/小时**。若日后改成走自家服务端代理，上述控制策略同样生效。
+- **网页端一键重跑打分（v2.1）**：用 `--serve` 打开时，页面右上角有「↻ 重跑打分」按钮——
+  服务端用子进程重新运行生成脚本（抓最新日K → 重算指标/打分/Top3 → 原子替换 index.html），
+  完成后页面自动刷新，更新打分不再需要回终端敲命令。接口仅监听 127.0.0.1，
+  并校验请求 Origin 防其它网站跨站触发；双击 `file://` 打开时按钮会提示改用 `--serve`（或仍用命令行重跑）。
+- **界面升级（v2.1）**：全局设计令牌（字体阶/灰阶/单强调色）、KPI 平面化分隔线布局、
+  SVG 线性图标、表格数字右对齐 + 斑马纹、登录页口令错误抖动反馈、入场动效（尊重
+  `prefers-reduced-motion`）；标的池分类新增「海外」（巴西/日经/印度等，修复巴西ETF误标）。
+  口令沿用 `.secret.json` 不变。
 - **前置密码门禁**：页面正文用 **PBKDF2-SHA256 + SHA256-CTR 流密钥整体加密**，
   浏览器原生 WebCrypto 解密 —— **拿到 HTML 文件本体也读不到内容**。
   首次运行自动生成本机随机口令（存 `dashboard/.secret.json`，已 gitignore），
