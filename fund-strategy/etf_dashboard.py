@@ -1336,9 +1336,20 @@ function startLive(){
     window.addEventListener('beforeunload', leave);
   }
 
-  // 一键重跑：让本地服务重新生成看板（--serve 模式；file:// 打开时给出提示）
+  // 一键重跑：让本地服务重新生成看板（仅 http://127.0.0.1:8899 / localhost:8899 打开时可用）
   const rrBtn = el('rerunBtn');
   if (rrBtn){
+    const isLocalServe = /^http:\/\/(127\.0\.0\.1|localhost):8899\/$/.test(location.origin + '/');
+    const resetBtn = () => {
+      rrBtn.dataset.busy = '0'; rrBtn.disabled = false; rrBtn.textContent = '↻ 重跑打分';
+    };
+    if (!isLocalServe){
+      // 预览面板 / file:// / 其它静态服务器打开：请求发不到看板服务，直接禁用并说明
+      rrBtn.disabled = true;
+      rrBtn.title = '请先通过本地服务打开页面：http://127.0.0.1:8899/index.html';
+      set('rerun-state', '⚠ 当前页面不是通过本地服务打开的（预览面板或 file://），重跑不可用。' +
+          '请用浏览器打开 http://127.0.0.1:8899/index.html（或双击 start_dashboard.bat）', '#b78103');
+    }
     rrBtn.addEventListener('click', async () => {
       if (rrBtn.dataset.busy === '1') return;
       rrBtn.dataset.busy = '1';
@@ -1349,7 +1360,13 @@ function startLive(){
       try{
         const resp = await fetch('/api/rerun', { method: 'POST' });
         data = await resp.json().catch(() => null);
-        if (!data) set('rerun-state', '⚠ 服务返回异常（HTTP ' + resp.status + '）', '#b78103');
+        if (!data){
+          if (resp.status === 404)
+            set('rerun-state', '⚠ 服务没有 /api/rerun 接口：当前打开页面的不是最新版看板服务。' +
+                '请双击 start_dashboard.bat 重新启动后，从 http://127.0.0.1:8899/index.html 打开', '#b78103');
+          else
+            set('rerun-state', '⚠ 服务返回异常（HTTP ' + resp.status + '）', '#b78103');
+        }
       }catch(e){
         set('rerun-state', '⚠ 本地服务未响应：若当前是双击 file:// 打开的页面，请先运行 ' +
                            'python fund-strategy/etf_dashboard.py --serve 并从浏览器访问', '#b78103');
@@ -1360,13 +1377,13 @@ function startLive(){
           setTimeout(() => { try{ location.reload(); }catch(e){} }, 1000);
         }else{
           set('rerun-state', '✅ 打分已更新（用时 ' + data.seconds + 's），请刷新页面（F5）查看新结果', '#137a52');
-          rrBtn.dataset.busy = '0'; rrBtn.disabled = false; rrBtn.textContent = '↻ 重跑打分';
+          resetBtn();
         }
       }else if (data && !data.ok){
         set('rerun-state', '⚠ ' + data.message, '#b78103');
-        rrBtn.dataset.busy = '0'; rrBtn.disabled = false; rrBtn.textContent = '↻ 重跑打分';
+        resetBtn();
       }else{
-        rrBtn.dataset.busy = '0'; rrBtn.disabled = false; rrBtn.textContent = '↻ 重跑打分';
+        resetBtn();
       }
     });
   }
