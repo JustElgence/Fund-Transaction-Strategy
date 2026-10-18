@@ -1050,9 +1050,11 @@ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .reasons{display:flex;flex-wrap:wrap;gap:6px}
 .reason{font-size:11.5px;color:var(--tx2);background:#f6f8fb;border:1px solid var(--line2);border-radius:6px;padding:2px 8px}
 .cand{padding:16px 20px 18px;margin-top:18px}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;font-weight:600;color:var(--tx3);font-size:12px;padding:7px 8px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+th,td{white-space:nowrap}
 th:nth-child(n+3),td:nth-child(n+3){text-align:right}
 td.nm{font-variant-numeric:normal;font-weight:600}
 td .cd{color:var(--tx3);font-weight:400;font-size:12px;margin-left:6px}
@@ -1065,8 +1067,20 @@ box-shadow:var(--shadow-sm);padding:16px 20px;color:var(--tx3);font-size:12px;li
 .foot hr{border:none;border-top:1px solid var(--line2);margin:10px 0}
 @media(max-width:960px){.top3{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}
 .kpi:nth-child(3){border-left:none;padding-left:2px}}
-@media(max-width:560px){body{padding:16px 12px 32px}.kpis{grid-template-columns:1fr}
-.kpi{border-left:none;padding-left:2px}.plan-grid{grid-template-columns:1fr}.title{font-size:22px}}
+@media(max-width:560px){
+body{padding:16px 12px 32px}.kpis{grid-template-columns:1fr}
+.kpi{border-left:none;padding-left:2px}.plan-grid{grid-template-columns:1fr}.title{font-size:22px}
+.cand{padding:12px 10px 14px;margin-top:14px}
+table{font-size:12.5px}th,td{padding:7px 6px}
+th:nth-child(8),td:nth-child(8),th:nth-child(9),td:nth-child(9){display:none}
+.price{font-size:24px;letter-spacing:-.4px}
+.plan{padding:10px 12px}.cell{padding:7px 9px}
+.act{padding:2px 9px;font-size:12.5px}
+.reason{font-size:11px}
+.foot{padding:14px 14px}
+.sec-title .tail{display:none}
+.stamp{font-size:11px}
+}
 /* -------- 登录门禁 -------- */
 #gate{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
 background:
@@ -1634,11 +1648,11 @@ def render_body(rows, senti, top3, candidates, data_date, pool_size, core_size, 
   <section class="card cand">
     <div class="sec-title"><span class="bar"></span>候选池 Top 10（从全池 {pool_size} 只打分产出）
       <span class="tail">价格每 30 秒同步刷新</span></div>
-    <table>
+    <div class="tbl-wrap"><table>
       <thead><tr><th>#</th><th>名称</th><th>现价</th><th>涨跌</th><th>得分</th>
         <th>状态</th><th>建议</th><th>5日</th><th>20日</th></tr></thead>
       <tbody>{"".join(cand_rows)}</tbody>
-    </table>
+    </table></div>
   </section>
 
   <div class="foot">
