@@ -932,6 +932,7 @@ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft
 .sub b{font-variant-numeric:tabular-nums}
 .stamp{text-align:right;color:var(--tx3);font-size:12.5px;line-height:1.7}
 .stamp b{color:var(--tx);font-weight:600;font-variant-numeric:tabular-nums}
+.stamp,.kpi .desc{overflow-wrap:anywhere}
 .live{display:inline-flex;align-items:center;gap:6px;background:#eef8f3;border:1px solid #cfead9;
 color:#137a52;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
 .mkt{display:inline-flex;align-items:center;font-weight:800;font-size:15px}
@@ -961,12 +962,12 @@ padding:1px 9px;font-size:12px;line-height:1.6;cursor:pointer;font-family:inheri
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
 .sentiment{padding:20px 22px 16px;margin-bottom:20px}
 .sec-title{font-size:15px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:16px}
-.sec-title .bar{width:4px;height:15px;border-radius:2px;background:var(--brand)}
+.sec-title .bar{width:4px;height:15px;flex:none;border-radius:2px;background:var(--brand)}
 .sec-title .ic{display:inline-flex;color:var(--brand)}
 .sec-title .ic svg{width:16px;height:16px}
 .sec-title .tail{margin-left:auto;font-weight:400;color:var(--tx3);font-size:12.5px}
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:0}
-.kpi{padding:2px 18px;border-left:1px solid var(--line2)}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0}
+.kpi{min-width:0;padding:2px 18px;border-left:1px solid var(--line2)}
 .kpi:first-child{border-left:none;padding-left:2px}
 .kpi .lab{color:var(--tx3);font-size:12px;letter-spacing:.3px;display:flex;align-items:center;gap:6px}
 .kpi .lab .icon{display:inline-flex;color:var(--tx3)}
@@ -1018,8 +1019,8 @@ border-radius:6px;padding:2px 8px;white-space:nowrap}
 .body{padding:14px 18px 16px;display:flex;flex-direction:column;gap:12px;flex:1}
 .score-row{display:flex;align-items:center;gap:10px}
 .score-row .s-lab{font-size:12px;color:var(--tx3);flex:none}
-.bar{flex:1;height:6px;border-radius:999px;background:#eceff3;overflow:hidden}
-.bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#6d94f2,#2563eb)}
+.score-row .bar{flex:1;height:6px;border-radius:999px;background:#eceff3;overflow:hidden}
+.score-row .bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#6d94f2,#2563eb)}
 .score-row .s-val{font-weight:700;font-variant-numeric:tabular-nums;color:var(--brand);font-size:14px;flex:none}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px}
 .kv{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;
@@ -1066,10 +1067,11 @@ box-shadow:var(--shadow-sm);padding:16px 20px;color:var(--tx3);font-size:12px;li
 .foot b{color:var(--tx2);font-weight:650}
 .foot hr{border:none;border-top:1px solid var(--line2);margin:10px 0}
 @media(max-width:960px){.top3{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}
-.kpi:nth-child(3){border-left:none;padding-left:2px}}
+.kpi:nth-child(3){border-left:none;padding-left:2px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){
-body{padding:16px 12px 32px}.kpis{grid-template-columns:1fr}
+body{padding:16px 12px 32px}.kpis{grid-template-columns:minmax(0,1fr)}
 .kpi{border-left:none;padding-left:2px}.plan-grid{grid-template-columns:1fr}.title{font-size:22px}
+.lock{padding:6px 14px;font-size:13px}
 .cand{padding:12px 10px 14px;margin-top:14px}
 table{font-size:12.5px}th,td{padding:7px 6px}
 th:nth-child(8),td:nth-child(8),th:nth-child(9),td:nth-child(9){display:none}
@@ -1087,7 +1089,7 @@ background:
 radial-gradient(900px 460px at 78% -140px,rgba(37,99,235,.08),transparent 62%),
 radial-gradient(700px 380px at -100px 20%,rgba(37,99,235,.05),transparent 60%),
 linear-gradient(165deg,#eef1f6,#f8fafc);z-index:99}
-.gate-box{width:352px;background:#fff;border:1px solid var(--line);border-radius:20px;
+.gate-box{width:min(352px,calc(100vw - 36px));background:#fff;border:1px solid var(--line);border-radius:20px;
 box-shadow:0 24px 70px rgba(16,24,40,.16);padding:30px 28px 24px}
 .gate-box .logo{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#2563eb,#4f7df0);
 display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:17px;margin-bottom:16px}

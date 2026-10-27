@@ -77,6 +77,10 @@ python3 fund-strategy/etf_dashboard.py
   SVG 线性图标、表格数字右对齐 + 斑马纹、登录页口令错误抖动反馈、入场动效（尊重
   `prefers-reduced-motion`）；标的池分类新增「海外」（巴西/日经/印度等，修复巴西ETF误标）。
   口令沿用 `.secret.json` 不变。
+- **移动端尺寸修复（v2.1）**：修复区块标题装饰条被评分条 `flex:1` 拉成横贯大条（共用 `.bar`
+  类名，标题被挤出屏幕）；`.kpis` 网格改 `minmax(0,1fr)` + `min-width:0` 防内容撑破页面；
+  时间戳/长文本加 `overflow-wrap:anywhere`；登录卡 `width:min(352px,100vw-36px)`
+  适配窄屏；移动端按钮加大触控区。已用 CDP 实测 390/320 无横向溢出。
 - **前置密码门禁**：页面正文用 **PBKDF2-SHA256 + SHA256-CTR 流密钥整体加密**，
   浏览器原生 WebCrypto 解密 —— **拿到 HTML 文件本体也读不到内容**。
   首次运行自动生成本机随机口令（存 `dashboard/.secret.json`，已 gitignore），
