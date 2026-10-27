@@ -1112,6 +1112,9 @@ padding:7px 11px;font-size:11.5px;line-height:1.55;margin-top:12px;display:none}
 #app{display:none}
 """
 
+# 登录门禁：允许的账户名（环境变量 ETF_DASHBOARD_USER，默认 admin；不视为机密）
+ALLOWED_USER = os.environ.get("ETF_DASHBOARD_USER", "admin")
+
 LOGIN_JS = r"""
 const el = id => document.getElementById(id);
 
@@ -1422,14 +1425,23 @@ function startLive(){
   }
 }
 
+const ALLOWED_USER = '__ETF_USER__';
+
 async function submit(){
+  const user = (el('user') ? el('user').value.trim() : '');
   const pw = el('pw').value, btn = el('btn'), err = el('err');
   if (!pw) return;
+  if (user !== ALLOWED_USER){
+    err.textContent = '账户或口令不对，请重试';
+    const box = document.querySelector('.gate-box');
+    if (box){ box.classList.remove('shake'); void box.offsetWidth; box.classList.add('shake'); }
+    return;
+  }
   btn.disabled = true; btn.textContent = '解密中…'; err.textContent = '';
   try{
     const html = await tryUnlock(pw);
     if (html === null){
-      err.textContent = '口令不对，请重试';
+      err.textContent = '账户或口令不对，请重试';
       const box = document.querySelector('.gate-box');
       if (box){ box.classList.remove('shake'); void box.offsetWidth; box.classList.add('shake'); }
       btn.disabled = false; btn.textContent = '进入看板';
@@ -1441,7 +1453,7 @@ async function submit(){
     const gate = el('gate');
     if (gate) gate.remove();
     const rm = el('remember');
-    if (rm && rm.checked) store.set('etf_pw', pw);
+    if (rm && rm.checked){ store.set('etf_pw', pw); store.set('etf_user', user); }
     startLive();
   }
   catch(e){
@@ -1461,10 +1473,11 @@ function wire(){
     el('warn').style.display = 'block';
   }
   el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  if (el('user')) el('user').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
   el('btn').addEventListener('click', submit);
   el('pw').focus();
   const saved = store.get('etf_pw');
-  if (saved){ el('pw').value = saved; submit(); }
+  if (saved){ if (el('user')) el('user').value = store.get('etf_user') || ALLOWED_USER; el('pw').value = saved; submit(); }
 }
 try{ wire(); }catch(e){ if (window.console) console.error(e); }
 """
@@ -1474,7 +1487,8 @@ GATE_HTML = '''
   <div class="gate-box">
     <div class="logo">ET</div>
     <h2>ETF 策略看板</h2>
-    <p>本页内容已加密，请输入访问口令</p>
+    <p>请输入账户和访问口令</p>
+    <input id="user" type="text" placeholder="账户" autocomplete="username">
     <input id="pw" type="password" placeholder="访问口令" autocomplete="current-password">
     <button id="btn" type="button">进入看板</button>
     <div class="gate-err" id="err" role="alert"></div>
@@ -1679,7 +1693,7 @@ def build_html(body, password, secret):
 <title>ETF 购买策略看板</title>
 <style>{CSS}</style></head>
 <body><div class="wrap" id="app">{body}</div>
-<script>{LOGIN_JS}</script>
+<script>{LOGIN_JS.replace("__ETF_USER__", ALLOWED_USER)}</script>
 </body></html>'''
 
     payload = encrypt(body.encode("utf-8"), password,
@@ -1699,7 +1713,7 @@ def build_html(body, password, secret):
 {GATE_HTML}
 <div id="app" class="wrap"></div>
 <script>window.__CFG__ = {cfg};</script>
-<script>{LOGIN_JS}</script>
+<script>{LOGIN_JS.replace("__ETF_USER__", ALLOWED_USER)}</script>
 </body></html>'''
 
 

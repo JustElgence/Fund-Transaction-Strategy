@@ -24,3 +24,6 @@ trades.log
 fund-strategy/dashboard/.kline_cache.json
 fund-strategy/dashboard/.state.json
 fund-strategy/dashboard/.secret.json
+
+# 看板构建产物（加密 HTML 含公开 salt，不入库；部署时由脚本生成）
+fund-strategy/dashboard/index.html
