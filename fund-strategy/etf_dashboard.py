@@ -914,6 +914,7 @@ def gauge_svg(value, w=200, h=112):
 
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 :root{--bg:#f6f7f9;--card:#fff;--line:#e7eaef;--line2:#eef0f4;--tx:#171c26;--tx2:#4c5566;
 --tx3:#6d7686;--up:#d93a3f;--down:#128a5c;--flat:#b78103;--brand:#2563eb;
 --shadow-sm:0 1px 2px rgba(16,24,40,.04);--shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px rgba(16,24,40,.06);--radius:16px;
@@ -1007,7 +1008,8 @@ display:flex;align-items:center;justify-content:center;flex:none}
 .rank.r1{background:linear-gradient(135deg,#f0a020,#e5484d)}
 .rank.r2{background:linear-gradient(135deg,#9aa4b5,#6b7280)}
 .rank.r3{background:linear-gradient(135deg,#c79a68,#a3733c)}
-.ename{font-size:16.5px;font-weight:750;letter-spacing:-.2px}
+.ename{font-size:16.5px;font-weight:750;letter-spacing:-.2px;min-width:0;flex:1;
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ecode{color:var(--tx3);font-size:12px;font-variant-numeric:tabular-nums}
 .cat{margin-left:auto;font-size:11.5px;color:var(--tx2);background:#f1f4f9;border:1px solid var(--line2);
 border-radius:6px;padding:2px 8px;white-space:nowrap}
@@ -1066,8 +1068,8 @@ tbody tr:hover{background:#f3f7ff}
 box-shadow:var(--shadow-sm);padding:16px 20px;color:var(--tx3);font-size:12px;line-height:1.75}
 .foot b{color:var(--tx2);font-weight:650}
 .foot hr{border:none;border-top:1px solid var(--line2);margin:10px 0}
-@media(max-width:960px){.top3{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}
-.kpi:nth-child(3){border-left:none;padding-left:2px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1180px){.top3{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+.kpi:nth-child(3){border-left:none;padding-left:2px}}
 @media(max-width:560px){
 body{padding:16px 12px 32px}.kpis{grid-template-columns:minmax(0,1fr)}
 .kpi{border-left:none;padding-left:2px}.plan-grid{grid-template-columns:1fr}.title{font-size:22px}
